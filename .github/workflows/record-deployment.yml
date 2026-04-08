@@ -1,0 +1,97 @@
+name: Record Deployment
+
+# This is a REUSABLE workflow. Other repos call this after deploying
+# to record the deployment event in the dashboard.
+#
+# Usage in your repo's workflow:
+#
+#   jobs:
+#     deploy:
+#       # ... your deploy steps ...
+#
+#     record-deploy:
+#       needs: deploy
+#       uses: <your-org>/Github_Dashboard/.github/workflows/record-deployment.yml@main
+#       with:
+#         repo_name: my-service
+#         environment: PROD
+#         version: ${{ github.ref_name }}
+#         deployer: ${{ github.actor }}
+#         commit_sha: ${{ github.sha }}
+#         release_notes_url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+#       secrets:
+#         API_URL: ${{ secrets.DEPLOY_DASHBOARD_API_URL }}
+#         API_KEY: ${{ secrets.DEPLOY_DASHBOARD_API_KEY }}
+
+on:
+  workflow_call:
+    inputs:
+      repo_name:
+        description: "Repository/service name (e.g. identity-service)"
+        required: true
+        type: string
+      environment:
+        description: "Target environment (DEV, STAGING, PROD)"
+        required: true
+        type: string
+      version:
+        description: "Version or tag deployed (e.g. v2.1.0)"
+        required: true
+        type: string
+      deployer:
+        description: "GitHub username who triggered the deploy"
+        required: true
+        type: string
+      commit_sha:
+        description: "Git commit SHA"
+        required: true
+        type: string
+      release_notes_url:
+        description: "URL to the GitHub release page"
+        required: false
+        type: string
+        default: ""
+      release_notes:
+        description: "Release notes body text"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      API_URL:
+        description: "Deployment Dashboard API endpoint URL"
+        required: true
+      API_KEY:
+        description: "API key for authenticating to the dashboard API"
+        required: true
+
+jobs:
+  record:
+    name: Record deployment event
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send deployment event to dashboard
+        run: |
+          HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ secrets.API_URL }}/deployments" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ secrets.API_KEY }}" \
+            -d '{
+              "repoName": "${{ inputs.repo_name }}",
+              "environment": "${{ inputs.environment }}",
+              "version": "${{ inputs.version }}",
+              "deployer": "@${{ inputs.deployer }}",
+              "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+              "commitSha": "${{ inputs.commit_sha }}",
+              "releaseNotesUrl": "${{ inputs.release_notes_url }}",
+              "releaseNotes": "${{ inputs.release_notes }}"
+            }')
+
+          echo "Response status: $HTTP_STATUS"
+          cat /tmp/response.json
+
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "::error::Failed to record deployment (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+
+          echo "Deployment recorded successfully!"

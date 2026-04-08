@@ -1,0 +1,5 @@
+{
+  "name": "cct-deployment-matrix",
+  "private": true,
+  "workspaces": ["frontend", "backend", "infra"]
+}

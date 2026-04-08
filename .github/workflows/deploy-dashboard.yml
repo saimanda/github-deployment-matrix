@@ -1,0 +1,82 @@
+name: Deploy Dashboard
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend (API + DynamoDB)
+    runs-on: ubuntu-latest
+    outputs:
+      api-url: ${{ steps.get-api-url.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            infra/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install and build backend
+        run: |
+          cd backend && npm ci && npm run build
+
+      - name: Deploy API stack
+        run: |
+          cd infra && npm ci && npx cdk deploy DeployDashboardApiStack --require-approval never
+
+      - name: Get API URL
+        id: get-api-url
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name DeployDashboardApiStack \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+
+  deploy-frontend:
+    name: Deploy Frontend (S3 + CloudFront)
+    runs-on: ubuntu-latest
+    needs: deploy-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build frontend
+        env:
+          VITE_API_URL: ${{ needs.deploy-backend.outputs.api-url }}
+        run: |
+          cd frontend && npm ci && npm run build
+
+      - name: Deploy Frontend stack
+        run: |
+          cd infra && npm ci && npx cdk deploy DeployDashboardFrontendStack --require-approval never
